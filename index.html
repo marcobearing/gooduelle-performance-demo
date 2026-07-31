@@ -66,13 +66,19 @@
         <div class="kpi-status-legend"><span class="status-chip source">Source</span><span class="status-chip hypothesis">Hypothèse</span><span class="status-chip estimated">Estimation</span><span class="status-chip missing">À compléter</span></div>
       </section>
       <section class="function-selector" id="kpiFunctionSelector"></section>
-      <section class="timeline-panel">
+      <section class="global-comparison-controls hidden" id="globalComparisonControls">
+        <div><span>RÉFÉRENCE GROUPE</span><strong>Comparer les valeurs géographiques à :</strong></div>
+        <div class="segmented-control global-reference-control" id="globalReferenceControl"><button class="active" type="button" data-reference="target" aria-pressed="true">Cible groupe</button><button type="button" data-reference="benchmark" aria-pressed="false">Benchmark global</button></div>
+        <p>Les clusters cochés à gauche deviennent des colonnes. Utilisez le bouton <b>+</b> dans un en-tête pour afficher les pays du cluster.</p>
+      </section>
+      <section class="timeline-panel" id="kpiTimelinePanel">
         <div class="timeline-header"><div><span>COMPARER L'ACTUEL À</span><strong id="timelineSelectedLabel">T4 2025</strong></div><div class="segmented-control timeline-grain" id="timelineGrain"><button class="active" type="button" data-grain="quarter" aria-pressed="true">Trimestre</button><button type="button" data-grain="month" aria-pressed="false">Mois</button></div></div>
         <div class="timeline-control"><span id="timelineMinLabel">Jan. 2024</span><input id="timelineSlider" type="range" min="0" max="10" value="7" step="1"><span id="timelineMaxLabel">Juin 2026</span></div>
         <div class="timeline-quality"><span class="timeline-dot source"></span>Observation source <span class="timeline-line estimated"></span>Interpolation / rétropolation estimée</div>
       </section>
       <section class="kpi-function-summary" id="kpiFunctionSummary" aria-live="polite"></section>
-      <section class="kpi-section-block generic"><div class="kpi-section-title"><span>KPIs génériques</span><small>Comparables entre fonctions</small></div><section class="kpi-card-grid" id="genericKpiGrid"></section></section>
+      <section class="global-kpi-table-panel hidden" id="globalKpiTablePanel"><div class="global-kpi-table-scroll"><table class="global-kpi-table"><thead id="globalKpiTableHead"></thead><tbody id="globalKpiTableBody"></tbody></table></div></section>
+      <section class="kpi-section-block generic" id="genericKpiSection"><div class="kpi-section-title"><span>KPIs génériques</span><small>Comparables entre fonctions</small></div><section class="kpi-card-grid" id="genericKpiGrid"></section></section>
       <section class="kpi-section-block specific" id="specificKpiSection"><div class="kpi-section-title"><span>KPIs spécifiques</span><small>Propres au métier de la fonction</small></div><section class="kpi-card-grid" id="specificKpiGrid"></section></section>
       <section class="kpi-method-panel">
         <div><strong>Historique</strong><span>Les points source sont rares. Les périodes intermédiaires et antérieures sont interpolées ou rétropolées, avec un badge Estimation.</span></div>
