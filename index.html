@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gooduelle Performance Demo</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-block">
+      <div class="brand-mark">GP</div>
+      <div><p class="eyebrow">PERFORMANCE PROGRAM · SYNTHETIC DATA</p><h1>Gooduelle Performance Demo</h1></div>
+    </div>
+    <div class="header-actions">
+      <a class="demo-download" href="./Gooduelle_Performance_Demo.xlsx" download>Télécharger le fichier démo</a>
+      <div class="data-status" id="dataStatus"><span class="status-dot demo"></span><span>Mode démonstration</span></div>
+      <label class="import-button" id="costImportButton" for="workbookInput" tabindex="0" role="button"><span>Importer Excel</span><input id="workbookInput" type="file" accept=".xlsx,.xlsm,.xls" class="visually-hidden"></label>
+    </div>
+  </header>
+
+  <nav class="module-nav" aria-label="Modules du dashboard">
+    <button class="module-tab active" type="button" data-module="costs" aria-selected="true">Coûts par fonction</button>
+    <button class="module-tab" type="button" data-module="kpis" aria-selected="false">KPIs de performance</button>
+    <span class="synthetic-banner">Données 100 % synthétiques · aucune donnée d'entreprise réelle</span>
+  </nav>
+
+  <main class="app-shell" id="costModule">
+    <aside class="sidebar">
+      <div class="sidebar-heading"><span>Filtres d'analyse</span><button class="text-button" id="resetFilters" type="button">Réinitialiser</button></div>
+      <section class="filter-section cascade-step"><div class="step-number">1</div><div class="cascade-content"><div class="filter-row"><span class="filter-label">Fonction</span><button class="text-button" type="button" data-select-all="functions">Toutes</button></div><div class="check-list" id="functionFilters"></div></div></section>
+      <section class="filter-section cascade-step"><div class="step-number">2</div><div class="cascade-content"><div class="filter-row"><span class="filter-label">Cluster</span><button class="text-button" type="button" data-select-all="clusters">Tous</button></div><div class="check-list scroll-list" id="clusterFilters"></div></div></section>
+      <section class="filter-section cascade-step"><div class="step-number">3</div><div class="cascade-content"><div class="filter-row"><span class="filter-label">Pays</span><button class="text-button" type="button" data-select-all="countries">Tous</button></div><div class="check-list scroll-list" id="countryFilters"></div><p class="filter-help">Réactivés automatiquement selon la fonction et le cluster.</p></div></section>
+      <section class="source-card"><span class="source-kicker">SOURCE ACTIVE</span><strong id="sourceName">Données de démonstration</strong><span id="sourceDetail">Structure compatible avec le classeur cible</span></section>
+    </aside>
+
+    <section class="dashboard">
+      <div class="dashboard-heading compact-heading"><div><p class="eyebrow green">FUNCTION COST BASE</p><h2>Pilotage des coûts fonctionnels</h2><p id="dashboardSubtitle">Comparaison des 12 mois actuels</p></div></div>
+      <section class="scope-flow"><div class="scope-flow-header"><span>PÉRIMÈTRE ACTIF</span><button class="text-button" id="scopeReset" type="button">Réinitialiser le périmètre</button></div><div class="scope-flow-grid" id="scopeFlow"></div></section>
+
+      <section class="panel main-comparison-panel">
+        <div class="panel-header chart-header"><div class="chart-heading"><span class="panel-kicker">COMPOSITION ET ÉCARTS PAR CATÉGORIE</span><h3 id="chartTitle">Référence, situation actuelle et budget FY26/27</h3><div class="chart-context" id="chartContext"></div></div><div class="chart-header-right"><div class="segmented-control comparison-control" id="comparisonControl"><button class="active" type="button" data-comparison="quarter" aria-pressed="true">Trimestre précédent</button><button type="button" data-comparison="year" aria-pressed="false">Année précédente</button></div></div></div>
+        <div class="connector-legend"><span><i class="arrow-down">↓</i>Baisse de coût</span><span><i class="arrow-up">↑</i>Hausse de coût</span><span><i class="budget-marker"></i>Budget FY26/27</span><span>Épaisseur = importance de l'écart</span></div>
+        <div class="stacked-flow-chart" id="comparisonChart"></div>
+        <div class="category-legend" id="chartLegend"></div>
+      </section>
+
+      <section class="panel table-panel">
+        <div class="panel-header table-header"><div><span class="panel-kicker">DÉTAIL PAR CATÉGORIE</span><h3 id="tableTitle">Catégories classées par importance de l'écart</h3></div><div class="table-note"><span class="good-dot"></span> Baisse de coût <span class="bad-dot"></span> Hausse de coût</div></div>
+        <div class="table-scroll"><table><thead><tr><th>Catégorie de coûts</th><th class="numeric" id="referenceHeader">Référence</th><th class="numeric">12 mois actuels</th><th class="numeric">Écart €</th><th class="numeric">Écart %</th><th class="numeric">Budget FY26/27</th><th class="numeric">Écart actuel vs budget €</th><th class="numeric">Écart actuel vs budget %</th></tr></thead><tbody id="varianceTableBody"></tbody></table></div>
+      </section>
+      <footer class="dashboard-footer"><span id="refreshInfo">Données de démonstration</span><span>Montants en EUR · Exercice fiscal juillet–juin</span></footer>
+    </section>
+  </main>
+
+  <main class="kpi-app-shell hidden" id="kpiModule">
+    <aside class="kpi-sidebar">
+      <div class="sidebar-heading"><span>Filtres KPI</span><button class="text-button" id="kpiGeoReset" type="button">Réinitialiser</button></div>
+      <section class="filter-section cascade-step"><div class="step-number">1</div><div class="cascade-content"><div class="filter-row"><span class="filter-label">Cluster</span><button class="text-button" type="button" data-kpi-select-all="clusters">Tous</button></div><div class="check-list scroll-list kpi-scroll-list" id="kpiClusterFilters"></div></div></section>
+      <section class="filter-section cascade-step"><div class="step-number">2</div><div class="cascade-content"><div class="filter-row"><span class="filter-label">Pays</span><button class="text-button" type="button" data-kpi-select-all="countries">Tous</button></div><div class="check-list scroll-list kpi-scroll-list" id="kpiCountryFilters"></div><p class="filter-help">Les pays sont recalculés selon les clusters sélectionnés.</p></div></section>
+      <section class="kpi-filter-status"><span>PÉRIMÈTRE ACTIF</span><strong id="kpiGeoSummary">Groupe Gooduelle</strong><small>Données fictives de démonstration.</small></section>
+    </aside>
+    <section class="kpi-module">
+      <section class="kpi-page-header">
+        <div><p class="eyebrow green">FUNCTION PERFORMANCE KPIs</p><h2>Indicateurs de performance par fonction</h2><p>Actuel, évolution historique, cible et benchmarks global/local.</p></div>
+        <div class="kpi-status-legend"><span class="status-chip source">Source</span><span class="status-chip hypothesis">Hypothèse</span><span class="status-chip estimated">Estimation</span><span class="status-chip missing">À compléter</span></div>
+      </section>
+      <section class="function-selector" id="kpiFunctionSelector"></section>
+      <section class="timeline-panel">
+        <div class="timeline-header"><div><span>COMPARER L'ACTUEL À</span><strong id="timelineSelectedLabel">T4 2025</strong></div><div class="segmented-control timeline-grain" id="timelineGrain"><button class="active" type="button" data-grain="quarter" aria-pressed="true">Trimestre</button><button type="button" data-grain="month" aria-pressed="false">Mois</button></div></div>
+        <div class="timeline-control"><span id="timelineMinLabel">Jan. 2024</span><input id="timelineSlider" type="range" min="0" max="10" value="7" step="1"><span id="timelineMaxLabel">Juin 2026</span></div>
+        <div class="timeline-quality"><span class="timeline-dot source"></span>Observation source <span class="timeline-line estimated"></span>Interpolation / rétropolation estimée</div>
+      </section>
+      <section class="kpi-function-summary" id="kpiFunctionSummary" aria-live="polite"></section>
+      <section class="kpi-section-block generic"><div class="kpi-section-title"><span>KPIs génériques</span><small>Comparables entre fonctions</small></div><section class="kpi-card-grid" id="genericKpiGrid"></section></section>
+      <section class="kpi-section-block specific" id="specificKpiSection"><div class="kpi-section-title"><span>KPIs spécifiques</span><small>Propres au métier de la fonction</small></div><section class="kpi-card-grid" id="specificKpiGrid"></section></section>
+      <section class="kpi-method-panel">
+        <div><strong>Historique</strong><span>Les points source sont rares. Les périodes intermédiaires et antérieures sont interpolées ou rétropolées, avec un badge Estimation.</span></div>
+        <div><strong>Benchmarks</strong><span>Le benchmark global provient des slides ou d'une hypothèse. Le benchmark local est ajusté selon le périmètre géographique.</span></div>
+      </section>
+    </section>
+  </main>
+
+  <div class="loading-overlay hidden" id="loadingOverlay" role="status" aria-live="polite"><div class="loading-card"><div class="spinner"></div><strong>Analyse du classeur</strong><span>Normalisation des fonctions, périodes et géographies...</span></div></div>
+  <div class="toast hidden" id="toast" role="status" aria-live="polite"></div><div class="tooltip hidden" id="tooltip"></div>
+  <script src="./xlsx.full.min.js"></script><script src="./app-v2.js"></script><script src="./kpi-module-v2.js"></script>
+</body>
+</html>

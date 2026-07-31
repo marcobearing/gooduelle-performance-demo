@@ -1,0 +1,15 @@
+const fs = require("fs");
+const XLSX = require("./xlsx.full.min.js");
+const workbook = XLSX.read(fs.readFileSync("Gooduelle_Performance_Demo.xlsx"), { type: "buffer", cellDates: true });
+const rows = (name) => XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, raw: true, defval: "" });
+const required = ["Mapping", "Cost Baseline", "Lever BCase - Updated", "Budget FY26-27"];
+for (const name of required) if (!workbook.Sheets[name]) throw new Error(`Missing sheet ${name}`);
+const mapping = rows("Mapping"), baseline = rows("Cost Baseline"), levers = rows("Lever BCase - Updated"), budget = rows("Budget FY26-27");
+const functions = new Set();
+for (const row of levers.slice(6)) if (row[5]) functions.add(row[5]);
+if (functions.size !== 6) throw new Error(`Expected 6 functions, found ${functions.size}`);
+if (mapping.length < 20 || baseline.length < 100 || levers.length < 15 || budget.length < 10) throw new Error("Fixture too small");
+for (const row of baseline.slice(2)) for (const value of row.slice(4, 10)) if (Number(value) < 0) throw new Error("Negative baseline value");
+const text = JSON.stringify({ mapping, baseline, levers, budget });
+for (const forbidden of ["Bonduelle", "F4P", "GELT", "Control Tower", "Delivery Board", "Marco", "Guillaume"]) if (text.toLowerCase().includes(forbidden.toLowerCase())) throw new Error(`Forbidden term ${forbidden}`);
+console.log(JSON.stringify({ sheets: workbook.SheetNames, rows: { mapping: mapping.length, baseline: baseline.length, levers: levers.length, budget: budget.length }, functions: [...functions].sort() }));
