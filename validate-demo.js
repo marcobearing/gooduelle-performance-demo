@@ -1,15 +1,10 @@
-const fs = require("fs");
-const XLSX = require("./xlsx.full.min.js");
-const workbook = XLSX.read(fs.readFileSync("Gooduelle_Performance_Demo.xlsx"), { type: "buffer", cellDates: true });
-const rows = (name) => XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, raw: true, defval: "" });
-const required = ["Mapping", "Cost Baseline", "Lever BCase - Updated", "Budget FY26-27"];
-for (const name of required) if (!workbook.Sheets[name]) throw new Error(`Missing sheet ${name}`);
-const mapping = rows("Mapping"), baseline = rows("Cost Baseline"), levers = rows("Lever BCase - Updated"), budget = rows("Budget FY26-27");
-const functions = new Set();
-for (const row of levers.slice(6)) if (row[5]) functions.add(row[5]);
-if (functions.size !== 6) throw new Error(`Expected 6 functions, found ${functions.size}`);
-if (mapping.length < 20 || baseline.length < 100 || levers.length < 15 || budget.length < 10) throw new Error("Fixture too small");
-for (const row of baseline.slice(2)) for (const value of row.slice(4, 10)) if (Number(value) < 0) throw new Error("Negative baseline value");
-const text = JSON.stringify({ mapping, baseline, levers, budget });
-for (const forbidden of ["Bonduelle", "F4P", "GELT", "Control Tower", "Delivery Board", "Marco", "Guillaume"]) if (text.toLowerCase().includes(forbidden.toLowerCase())) throw new Error(`Forbidden term ${forbidden}`);
-console.log(JSON.stringify({ sheets: workbook.SheetNames, rows: { mapping: mapping.length, baseline: baseline.length, levers: levers.length, budget: budget.length }, functions: [...functions].sort() }));
+const fs=require("fs"),XLSX=require("./xlsx.full.min.js"),w=XLSX.read(fs.readFileSync("Gooduelle_Performance_Demo.xlsx"),{type:"buffer",cellDates:true}),rows=n=>XLSX.utils.sheet_to_json(w.Sheets[n],{header:1,raw:true,defval:""});
+const required=["Mapping","Cost Baseline","Lever BCase - Updated","Budget FY26-27","Monthly_Data","KPI_Catalog","KPI_History","Data Dictionary","Generation Log"];for(const n of required)if(!w.Sheets[n])throw Error(`Missing ${n}`);
+const mapping=rows("Mapping"),baseline=rows("Cost Baseline"),budget=rows("Budget FY26-27"),monthly=rows("Monthly_Data"),catalog=rows("KPI_Catalog"),history=rows("KPI_History"),log=rows("Generation Log");
+const functions=["D&T","Finance","HR","Supply","Marketing","Sales"],entities=mapping.slice(1).map(r=>r[0]),categories=["Staff Cost - Indirect","Staff Cost - SG&A","Staff Cost - SG&A or Indirect","External Personnel Costs","IT Costs","Outside Consulting, Fees","Other Costs"];
+const expected=entities.length*functions.length*categories.length;if(budget.length-6!==expected)throw Error(`Budget coverage ${budget.length-6}/${expected}`);for(const entity of entities)for(const fn of functions)for(const cat of categories)if(!budget.slice(6).some(r=>r[3]===entity&&r[1]===fn&&r[8]===cat))throw Error(`Missing budget ${entity}/${fn}/${cat}`);
+for(const r of baseline.slice(2))for(const v of r.slice(4,10))if(Number(v)<0)throw Error("Negative baseline");
+const monthlyTotals=new Map();for(const r of monthly.slice(1)){const key=[r[4],r[8],r[9]].join("|");monthlyTotals.set(key,(monthlyTotals.get(key)||0)+Number(r[11]))}for(const r of baseline.slice(2)){functions.forEach((fn,i)=>{const key=[r[0],fn,r[3]].join("|");if(Math.abs((monthlyTotals.get(key)||0)-Number(r[4+i]))>.01)throw Error(`Monthly reconciliation ${key}`)})}
+if(catalog.length<13||history.length<500||log.length<100)throw Error("Traceability datasets too small");
+const text=JSON.stringify({mapping,baseline,budget,monthly,catalog,history,log});for(const term of ["Bonduelle","F4P","GELT","Control Tower","Delivery Board","Marco","Guillaume"])if(text.toLowerCase().includes(term.toLowerCase()))throw Error(`Forbidden ${term}`);
+console.log(JSON.stringify({sheets:w.SheetNames,budgetRows:budget.length-6,expectedBudgetRows:expected,monthlyRows:monthly.length-1,kpiRows:catalog.length-1,kpiHistoryRows:history.length-1,traceRows:log.length-1}));

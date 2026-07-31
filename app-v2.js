@@ -333,12 +333,13 @@
         const baseline = functionGroup.filter((fact) => fact.scenario === "Baseline" && fact.component === "baseline" && inWindow(fact, windows.budget));
         functionBudget = nonNegativeSegments(baseline.concat(budgetChanges), detailed); sources.add("Excel");
       } else {
-        functionBudget = {}; Object.entries(functionCurrent).forEach(([key, value]) => { functionBudget[key] = Math.max(0, value * .95); }); sources.add("Synthétique");
+        functionBudget = {};
+        sources.add("Budget manquant");
       }
       Object.entries(functionBudget).forEach(([key, value]) => { segments[key] = (segments[key] || 0) + value; });
     });
-    Object.keys(currentSegments).forEach((key) => { if (segments[key] == null) segments[key] = Math.max(0, currentSegments[key] * .95); });
-    return { segments, source: sources.size > 1 ? "Excel + synthétique" : sources.has("Excel") ? "Excel FY26/27" : "Synthétique -5 %" };
+    Object.keys(currentSegments).forEach((key) => { if (segments[key] == null) segments[key] = 0; });
+    return { segments, source: sources.size > 1 ? [...sources].join(" + ") : sources.has("Excel") ? "Excel FY26/27" : "Budget manquant" };
   }
 
   function aggregateRows() {
