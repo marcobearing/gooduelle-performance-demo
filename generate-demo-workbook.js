@@ -5,6 +5,8 @@ const SEED = "gooduelle-traceable-demo-v2";
 const FUNCTIONS = ["D&T", "Finance", "HR", "Supply", "Marketing", "Sales"];
 const CATEGORIES = ["Staff Cost - Indirect", "Staff Cost - SG&A", "Staff Cost - SG&A or Indirect", "External Personnel Costs", "IT Costs", "Outside Consulting, Fees", "Other Costs"];
 const FYS = ["FY25/26", "FY26/27", "FY27/28", "FY28/29"];
+const OD_FYS = ["FY26/27", "FY27/28", "FY28/29"];
+const OD_SCENARIOS = ["Baseline", "Budget", "Plan", "Forecast", "Actual"];
 const GEOS = [
   ["50001","EU","France - Long Life","FRA"],["50002","EU","France - Traiteur","FRA"],["50003","EU","Champiland","FRA"],
   ["50004","EU","BDNE","BEL"],["50005","EU","BDNE","NLD"],["50006","EU","BDNE","DEU"],["50007","EU","BDNE","AUT"],["50008","EU","BDNE","LUX"],
@@ -27,6 +29,7 @@ function amount(key,min,max,step=100){return Math.round((min+unit(key)*(max-min)
 function pct(key,min,max){return +(min+unit(key)*(max-min)).toFixed(2)}
 function addMonths(date,count){return new Date(date.getFullYear(),date.getMonth()+count,1)}
 function fyDates(fy){const year=2000+Number(fy.slice(2,4));return[new Date(year,6,1),new Date(year+1,5,1)]}
+function fiscalYear(date){const year=date.getMonth()>=6?date.getFullYear():date.getFullYear()-1;return`FY${String(year).slice(-2)}/${String(year+1).slice(-2)}`}
 function traceId(type,...parts){return`${type}-${hash(parts.join("|")).toString(16).toUpperCase().padStart(8,"0")}`}
 function appendBook(workbook,name,rows){XLSX.utils.book_append_sheet(workbook,XLSX.utils.aoa_to_sheet(rows),name)}
 
@@ -55,7 +58,74 @@ const kpiCatalog=[["KPI ID","Function","KPI Name","Unit","Direction","Current","
 for(const [fn,kpis] of Object.entries(KPI_BENCHMARKS))for(const [name,unitLabel,benchmark] of kpis){const id=traceId("KPI",fn,name),direction=/coût|ETP Accounts|externes/i.test(name)?"Lower":"Higher",current=unitLabel.includes("M€")?pct(`kpi-current|${id}`,2.1,26):unitLabel.includes("k€")?pct(`kpi-current|${id}`,1.5,2.5):pct(`kpi-current|${id}`,8,96),target=direction==="Lower"?current*.84:current*1.12;kpiCatalog.push([id,fn,name,unitLabel,direction,current,target,benchmark,"Synthetic","Illustrative benchmark","Independent KPI model"]);for(const [,region,cluster,country] of GEOS)for(let m=0;m<30;m++){const date=addMonths(new Date(2024,0,1),m),trend=(m/29-.5)*(direction==="Lower"?-1:1)*current*.08,noise=pct(`kpi-hist|${id}|${cluster}|${country}|${m}`,-current*.018,current*.018);kpiHistory.push([id,date,fn,cluster,country,Math.max(0,current+trend+noise),"Synthetic","Deterministic trend plus bounded noise"])}trace.push([id,"KPI Catalog","","",fn,name,"Current/Target","Independent KPI model",SEED])}
 appendBook(workbook,"KPI_Catalog",kpiCatalog);appendBook(workbook,"KPI_History",kpiHistory);
 
-appendBook(workbook,"Data Dictionary",[["Sheet","Field / Range","Definition","Status"],["Mapping","A:F","Synthetic legal entity geography reference","Synthetic"],["Cost Baseline","A:P","FY25/26 annual recurring cost baseline","Synthetic"],["Lever BCase - Updated","A:AV","Annual synthetic transformation initiatives","Synthetic"],["Budget FY26-27","A:S","Explicit budget impacts for every entity/function/category","Synthetic"],["Monthly_Data","A:N","Reconciled monthly baseline facts","Synthetic"],["KPI_Catalog","A:K","KPI definitions, current, target and global benchmark","Synthetic except illustrative benchmarks"],["KPI_History","A:H","Monthly KPI observations by geography","Synthetic"],["Generation Log","A:I","Traceability metadata for generated facts","Synthetic"]]);
+const odDimensions=[];
+for(const [entity,region,cluster,country] of GEOS)for(const fn of FUNCTIONS){
+  const baseFte=12+Math.floor(unit(`od-base-fte|${entity}|${fn}`)*74);
+  const annualStaffCost=amount(`od-staff-cost|${entity}|${fn}`,42000,112000,500);
+  const socialRate=pct(`od-social-rate|${country}`,.17,.34);
+  odDimensions.push({entity,region,cluster,country,fn,baseFte,monthlyStaffCost:annualStaffCost/12,socialRate});
+}
+const odMovements=[["Trace ID","Movement ID","Month","Fiscal Year","Scenario","Movement Type","Signed FTE","Legal Entity","Region","Cluster","Country","Function","Counterparty Legal Entity","Counterparty Function","Transfer Pair ID","Monthly Staff Cost Impact","Employer Social Charges Impact","Total People Cost Impact","Data Status","Generation Method"]];
+const odMonthly=[["Trace ID","Month","Fiscal Year","Scenario","Legal Entity","Region","Cluster","Country","Function","Opening FTE","Hire FTE","Exit FTE","Transfer In FTE","Transfer Out FTE","Signed Movements FTE","Closing FTE","Staff Cost","Employer Social Charges","Total People Cost","Baseline Total People Cost","Monthly Savings vs Baseline","Cumulative Savings vs Baseline","Data Status","Generation Method"]];
+const actualClosing=new Map(),actualCumulative=new Map();
+function odMonthsForScenario(scenario){
+  if(scenario==="Actual")return[0,1].map(offset=>addMonths(new Date(2026,6,1),offset));
+  if(scenario==="Forecast")return Array.from({length:34},(_,offset)=>addMonths(new Date(2026,8,1),offset));
+  return Array.from({length:36},(_,offset)=>addMonths(new Date(2026,6,1),offset));
+}
+function addOdMovement(events,scenario,month,type,index,fte,counterpartyIndex=-1,pairId=""){
+  const dimension=odDimensions[index],counterparty=counterpartyIndex>=0?odDimensions[counterpartyIndex]:null;
+  const sign=type==="Exit"||type==="Transfer Out"?-1:1,signedFte=sign*fte;
+  const staffImpact=Math.round(signedFte*dimension.monthlyStaffCost),socialImpact=Math.round(staffImpact*dimension.socialRate),totalImpact=staffImpact+socialImpact;
+  const movementId=traceId("ODM",scenario,month.toISOString(),type,index,pairId),method=type.startsWith("Transfer")?"Deterministic paired transfer":"Deterministic scenario movement";
+  events.push({index,type,fte,signedFte});
+  odMovements.push([movementId,movementId,month,fiscalYear(month),scenario,type,signedFte,dimension.entity,dimension.region,dimension.cluster,dimension.country,dimension.fn,counterparty?.entity||"",counterparty?.fn||"",pairId,staffImpact,socialImpact,totalImpact,"Synthetic",method]);
+  trace.push([movementId,"OD_Movements",dimension.entity,dimension.country,dimension.fn,type,fiscalYear(month),method,SEED]);
+}
+function generateOdEvents(scenario,month,state){
+  const events=[],monthKey=`${month.getFullYear()}-${month.getMonth()+1}`,scenarioRate={Actual:.055,Budget:.035,Plan:.045,Forecast:.04}[scenario]||0;
+  for(let index=0;index<odDimensions.length;index++){
+    if(unit(`od-event|${scenario}|${monthKey}|${index}`)>=scenarioRate)continue;
+    const type=unit(`od-event-type|${scenario}|${monthKey}|${index}`)<({Actual:.46,Budget:.58,Plan:.50,Forecast:.43}[scenario]||.5)?"Hire":"Exit";
+    const fte=1+(unit(`od-event-size|${scenario}|${monthKey}|${index}`)>.82?1:0);
+    if(type==="Exit"&&state[index]<fte)continue;
+    addOdMovement(events,scenario,month,type,index,fte);
+  }
+  const transferCount=scenario==="Actual"?3:scenario==="Baseline"?0:4;
+  for(let transfer=0;transfer<transferCount;transfer++){
+    let source=hash(`od-transfer-source|${scenario}|${monthKey}|${transfer}`)%odDimensions.length;
+    let target=hash(`od-transfer-target|${scenario}|${monthKey}|${transfer}`)%odDimensions.length;
+    if(target===source)target=(target+1)%odDimensions.length;
+    const fte=1+(unit(`od-transfer-size|${scenario}|${monthKey}|${transfer}`)>.88?1:0);
+    if(state[source]<fte)continue;
+    const pairId=traceId("ODT",scenario,monthKey,transfer);
+    addOdMovement(events,scenario,month,"Transfer Out",source,fte,target,pairId);
+    addOdMovement(events,scenario,month,"Transfer In",target,fte,source,pairId);
+  }
+  return events;
+}
+function buildOdScenario(scenario){
+  const state=odDimensions.map((dimension,index)=>scenario==="Forecast"?actualClosing.get(index):dimension.baseFte);
+  const cumulative=odDimensions.map((_,index)=>scenario==="Forecast"?(actualCumulative.get(index)||0):0);
+  for(const month of odMonthsForScenario(scenario)){
+    const opening=[...state],events=generateOdEvents(scenario,month,state),movementTotals=odDimensions.map(()=>({Hire:0,Exit:0,"Transfer In":0,"Transfer Out":0,signed:0}));
+    for(const event of events){movementTotals[event.index][event.type]+=event.fte;movementTotals[event.index].signed+=event.signedFte;state[event.index]+=event.signedFte}
+    odDimensions.forEach((dimension,index)=>{
+      const movements=movementTotals[index],averageFte=(opening[index]+state[index])/2,staffCost=Math.round(averageFte*dimension.monthlyStaffCost),social=Math.round(staffCost*dimension.socialRate),total=staffCost+social;
+      const baselineStaff=Math.round(dimension.baseFte*dimension.monthlyStaffCost),baselineSocial=Math.round(baselineStaff*dimension.socialRate),baselineTotal=baselineStaff+baselineSocial,monthlySavings=baselineTotal-total;
+      cumulative[index]+=monthlySavings;
+      const id=traceId("ODMTH",scenario,month.toISOString(),dimension.entity,dimension.fn);
+      odMonthly.push([id,month,fiscalYear(month),scenario,dimension.entity,dimension.region,dimension.cluster,dimension.country,dimension.fn,opening[index],movements.Hire,movements.Exit,movements["Transfer In"],movements["Transfer Out"],movements.signed,state[index],staffCost,social,total,baselineTotal,monthlySavings,cumulative[index],"Synthetic",scenario==="Baseline"?"Frozen June 2026 baseline":"Deterministic opening-movement-closing ledger"]);
+      trace.push([id,"OD_Monthly",dimension.entity,dimension.country,dimension.fn,scenario,fiscalYear(month),"Deterministic OD monthly ledger",SEED]);
+    });
+  }
+  if(scenario==="Actual")odDimensions.forEach((_,index)=>{actualClosing.set(index,state[index]);actualCumulative.set(index,cumulative[index])});
+}
+for(const scenario of ["Baseline","Budget","Plan","Actual","Forecast"])buildOdScenario(scenario);
+appendBook(workbook,"OD_Movements",odMovements);
+appendBook(workbook,"OD_Monthly",odMonthly);
+
+appendBook(workbook,"Data Dictionary",[["Sheet","Field / Range","Definition","Status"],["Mapping","A:F","Synthetic legal entity geography reference","Synthetic"],["Cost Baseline","A:P","FY25/26 annual recurring cost baseline","Synthetic"],["Lever BCase - Updated","A:AV","Annual synthetic transformation initiatives","Synthetic"],["Budget FY26-27","A:S","Explicit budget impacts for every entity/function/category","Synthetic"],["Monthly_Data","A:N","Reconciled monthly baseline facts","Synthetic"],["KPI_Catalog","A:K","KPI definitions, current, target and global benchmark","Synthetic except illustrative benchmarks"],["KPI_History","A:H","Monthly KPI observations by geography","Synthetic"],["OD_Movements","A:T","Hire, Exit, Transfer In and Transfer Out events; signed FTE and monthly people-cost impact by organisation dimension and scenario","Synthetic"],["OD_Monthly","A:X","Monthly OD ledger from frozen June 2026 baseline, with actuals through August 2026 and forecast thereafter; opening, movement, closing FTE, people costs and savings","Synthetic"],["Generation Log","A:I","Traceability metadata for generated facts, including OD movement and monthly records","Synthetic"]]);
 appendBook(workbook,"Generation Log",[["Trace ID","Dataset","Legal Entity","Country","Function","Category / KPI","Period","Generation Method","Seed"],...trace]);
 
 workbook.Props={Title:"Gooduelle Performance Demo - Traceable Synthetic Data",Subject:"Fully synthetic and traceable demonstration dataset",Author:"Gooduelle Demo Generator",Company:"Gooduelle",Comments:`Generated deterministically with seed ${SEED}. No operational source data used.`};

@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Gooduelle Performance Demo</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230c6849'/><text x='16' y='21' text-anchor='middle' font-family='Arial' font-size='14' font-weight='700' fill='white'>GP</text></svg>">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -21,7 +22,8 @@
 
   <nav class="module-nav" aria-label="Modules du dashboard">
     <button class="module-tab active" type="button" data-module="costs" aria-selected="true">Coûts par fonction</button>
-    <button class="module-tab" type="button" data-module="kpis" aria-selected="false">KPIs de performance</button>
+    <button class="module-tab" type="button" data-module="kpis" aria-selected="false">KPIs par fonction</button>
+    <button class="module-tab" type="button" data-module="od" aria-selected="false">OD Monitoring</button>
     <span class="synthetic-banner">Données 100 % synthétiques · aucune donnée d'entreprise réelle</span>
   </nav>
 
@@ -50,6 +52,42 @@
         <div class="table-scroll"><table><thead><tr><th>Catégorie de coûts</th><th class="numeric" id="referenceHeader">Référence</th><th class="numeric">12 mois actuels</th><th class="numeric">Écart €</th><th class="numeric">Écart %</th><th class="numeric">Budget FY26/27</th><th class="numeric">Écart actuel vs budget €</th><th class="numeric">Écart actuel vs budget %</th></tr></thead><tbody id="varianceTableBody"></tbody></table></div>
       </section>
       <footer class="dashboard-footer"><span id="refreshInfo">Données de démonstration</span><span>Montants en EUR · Exercice fiscal juillet–juin</span></footer>
+    </section>
+  </main>
+
+  <main class="od-app-shell hidden" id="odModule">
+    <aside class="od-sidebar">
+      <div class="sidebar-heading"><span>Filtres OD</span><button class="text-button" id="odReset" type="button">Réinitialiser</button></div>
+      <section class="filter-section cascade-step"><div class="step-number">1</div><div class="cascade-content"><div class="filter-row"><span class="filter-label">Fonction</span><button class="text-button" type="button" data-od-all="functions">Toutes</button></div><div class="check-list od-scroll-list" id="odFunctionFilters"></div></div></section>
+      <section class="filter-section cascade-step"><div class="step-number">2</div><div class="cascade-content"><div class="filter-row"><span class="filter-label">Cluster</span><button class="text-button" type="button" data-od-all="clusters">Tous</button></div><div class="check-list od-scroll-list" id="odClusterFilters"></div></div></section>
+      <section class="filter-section cascade-step"><div class="step-number">3</div><div class="cascade-content"><div class="filter-row"><span class="filter-label">Pays</span><button class="text-button" type="button" data-od-all="countries">Tous</button></div><div class="check-list od-scroll-list" id="odCountryFilters"></div></div></section>
+      <section class="filter-section"><label for="odFiscalYear">Période</label><select id="odFiscalYear"><option value="ALL">Programme complet</option><option>FY26/27</option><option>FY27/28</option><option>FY28/29</option></select></section>
+      <section class="filter-section"><span class="filter-label">Types de mouvement</span><div class="check-list" id="odMovementFilters"></div></section>
+      <section class="od-filter-status"><span>PÉRIMÈTRE ACTIF</span><strong id="odScopeSummary">Groupe Gooduelle</strong><small>Baseline figée à juin 2026 · actuals à août 2026</small></section>
+    </aside>
+    <section class="od-dashboard">
+      <header class="od-page-header"><div><p class="eyebrow green">ORGANIZATION DESIGN PROGRAM</p><h2>OD Monitoring</h2><p>Suivi des mouvements ETP, des staff costs et des charges sociales employeur.</p></div><div class="od-asof"><span>ARRÊTÉ RÉEL</span><strong>Août 2026</strong><small>Forecast jusqu'à juin 2029</small></div></header>
+      <nav class="od-view-selector" id="odViewSelector" aria-label="Vues OD Monitoring"><button class="active" type="button" data-od-view="summary">Synthèse</button><button type="button" data-od-view="trajectories">Trajectoires</button><button type="button" data-od-view="movements">Mouvements</button><button type="button" data-od-view="detail">Détail</button></nav>
+      <div class="od-loading" id="odLoading">Chargement des données OD synthétiques…</div>
+      <div id="odContent" class="hidden">
+        <section class="od-view" data-od-panel="summary">
+          <div class="od-summary-grid" id="odSummaryCards"></div>
+          <div class="od-chart-grid"><section class="panel od-chart-panel"><div class="panel-header"><div><span class="panel-kicker">TRAJECTOIRE ETP</span><h3>Baseline, plan, budget et actual + forecast</h3></div><div class="od-legend" id="odFteLegend"></div></div><div class="od-chart-wrap" id="odFteChart"></div></section><section class="panel od-chart-panel"><div class="panel-header"><div><span class="panel-kicker">IMPACT CUMULÉ</span><h3>Économies vs baseline</h3></div></div><div class="od-chart-wrap compact" id="odCumulativeChart"></div></section></div>
+          <section class="panel od-annual-panel"><div class="panel-header"><div><span class="panel-kicker">VISION BUDGÉTAIRE</span><h3>Impacts produits pendant chaque exercice</h3></div><span class="od-panel-note">Économies positives en vert</span></div><div class="od-annual-grid" id="odAnnualCards"></div></section>
+        </section>
+        <section class="od-view hidden" data-od-panel="trajectories">
+          <section class="panel od-chart-panel od-wide-panel"><div class="panel-header"><div><span class="panel-kicker">ETP MENSUELS</span><h3>Trajectoire prévisionnelle vs réelle</h3></div><div class="od-legend" id="odFteLegendDetail"></div></div><div class="od-chart-wrap large" id="odFteChartDetail"></div></section>
+          <div class="od-two-charts"><section class="panel od-chart-panel"><div class="panel-header"><div><span class="panel-kicker">STAFF COSTS</span><h3>Coûts mensuels</h3></div></div><div class="od-chart-wrap" id="odStaffChart"></div></section><section class="panel od-chart-panel"><div class="panel-header"><div><span class="panel-kicker">CHARGES SOCIALES EMPLOYEUR</span><h3>ENR mensuels</h3></div></div><div class="od-chart-wrap" id="odSocialChart"></div></section></div>
+          <section class="panel od-chart-panel"><div class="panel-header"><div><span class="panel-kicker">TOTAL PEOPLE COSTS</span><h3>Économie mensuelle et cumulée vs baseline</h3></div></div><div class="od-chart-wrap" id="odSavingsChart"></div></section>
+        </section>
+        <section class="od-view hidden" data-od-panel="movements">
+          <section class="panel od-chart-panel"><div class="panel-header"><div><span class="panel-kicker">PONT ETP</span><h3>Contribution des mouvements au résultat net</h3></div><span class="od-panel-note" id="odWaterfallPeriod"></span></div><div class="od-chart-wrap" id="odWaterfallChart"></div></section>
+          <section class="panel od-chart-panel"><div class="panel-header"><div><span class="panel-kicker">RYTHME DES MOUVEMENTS</span><h3>Recrutements, départs, transferts et impact net</h3></div></div><div class="od-chart-wrap large" id="odMovementChart"></div></section>
+        </section>
+        <section class="od-view hidden" data-od-panel="detail">
+          <section class="panel table-panel"><div class="panel-header"><div><span class="panel-kicker">DÉTAIL ORGANISATIONNEL</span><h3>Fonction, cluster et pays</h3></div><span class="od-panel-note">Actual + forecast comparé au plan</span></div><div class="table-scroll"><table class="od-detail-table"><thead><tr><th>Périmètre</th><th class="numeric">ETP baseline</th><th class="numeric">Recrutements</th><th class="numeric">Départs</th><th class="numeric">Transferts nets</th><th class="numeric">Impact net ETP</th><th class="numeric">ETP forecast</th><th class="numeric">Écart au plan</th><th class="numeric">Staff costs</th><th class="numeric">Charges sociales</th><th class="numeric">Économie vs baseline</th></tr></thead><tbody id="odDetailBody"></tbody></table></div></section>
+        </section>
+      </div>
     </section>
   </main>
 
@@ -88,6 +126,6 @@
 
   <div class="loading-overlay hidden" id="loadingOverlay" role="status" aria-live="polite"><div class="loading-card"><div class="spinner"></div><strong>Analyse du classeur</strong><span>Normalisation des fonctions, périodes et géographies...</span></div></div>
   <div class="toast hidden" id="toast" role="status" aria-live="polite"></div><div class="tooltip hidden" id="tooltip"></div>
-  <script src="./xlsx.full.min.js"></script><script src="./app-v2.js"></script><script src="./kpi-module-v2.js"></script>
+  <script src="./xlsx.full.min.js"></script><script src="./app-v2.js"></script><script src="./kpi-module-v2.js"></script><script src="./od-module.js"></script>
 </body>
 </html>
