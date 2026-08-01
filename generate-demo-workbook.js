@@ -65,67 +65,141 @@ for(const [entity,region,cluster,country] of GEOS)for(const fn of FUNCTIONS){
   const socialRate=pct(`od-social-rate|${country}`,.17,.34);
   odDimensions.push({entity,region,cluster,country,fn,baseFte,monthlyStaffCost:annualStaffCost/12,socialRate});
 }
-const odMovements=[["Trace ID","Movement ID","Month","Fiscal Year","Scenario","Movement Type","Signed FTE","Legal Entity","Region","Cluster","Country","Function","Counterparty Legal Entity","Counterparty Function","Transfer Pair ID","Monthly Staff Cost Impact","Employer Social Charges Impact","Total People Cost Impact","Data Status","Generation Method"]];
-const odMonthly=[["Trace ID","Month","Fiscal Year","Scenario","Legal Entity","Region","Cluster","Country","Function","Opening FTE","Hire FTE","Exit FTE","Transfer In FTE","Transfer Out FTE","Signed Movements FTE","Closing FTE","Staff Cost","Employer Social Charges","Total People Cost","Baseline Total People Cost","Monthly Savings vs Baseline","Cumulative Savings vs Baseline","Data Status","Generation Method"]];
-const actualClosing=new Map(),actualCumulative=new Map();
-function odMonthsForScenario(scenario){
+const odFunctionIndexes=new Map(FUNCTIONS.map(fn=>[fn,odDimensions.map((d,index)=>d.fn===fn?index:-1).filter(index=>index>=0)]));
+const odBaselineFte=Object.fromEntries(FUNCTIONS.map(fn=>[fn,odFunctionIndexes.get(fn).reduce((sum,index)=>sum+odDimensions[index].baseFte,0)]));
+const odBaselineStaff=Object.fromEntries(FUNCTIONS.map(fn=>[fn,odFunctionIndexes.get(fn).reduce((sum,index)=>sum+Math.round(odDimensions[index].baseFte*odDimensions[index].monthlyStaffCost),0)]));
+const odBaselineGroup=Object.values(odBaselineFte).reduce((sum,value)=>sum+value,0);
+const odPlanFinal={
+  "D&T":Math.round(odBaselineFte["D&T"]*1.02),
+  Finance:Math.round(odBaselineFte.Finance*.50),
+  HR:Math.round(odBaselineFte.HR*.95),
+  Marketing:Math.round(odBaselineFte.Marketing*.975),
+  Sales:Math.round(odBaselineFte.Sales*.975)
+};
+odPlanFinal.Supply=Math.round(odBaselineGroup*.90)-Object.values(odPlanFinal).reduce((sum,value)=>sum+value,0);
+const odScenarioFinal={
+  Plan:odPlanFinal,
+  Budget:Object.fromEntries(FUNCTIONS.map(fn=>[fn,odBaselineFte[fn]+Math.round((odPlanFinal[fn]-odBaselineFte[fn])*(fn==="D&T"?.85:.93))])),
+  Forecast:Object.fromEntries(FUNCTIONS.map(fn=>[fn,odBaselineFte[fn]+Math.round((odPlanFinal[fn]-odBaselineFte[fn])*({"D&T":.93,Finance:.98,HR:.90,Supply:1.01,Marketing:.90,Sales:1.05}[fn]))]))
+};
+const odMovements=[["Trace ID","Movement ID","Month","Fiscal Year","Scenario","Movement Type","Exit Subtype","Signed FTE","Legal Entity","Region","Cluster","Country","Function","Counterparty Legal Entity","Counterparty Function","Transfer Pair ID","Recurring Staff Cost Impact","Recurring Employer Social Charges Impact","Transformation Social Cost (ENR)","Recurring Total People Cost Impact","Total Cash Cost Impact Including ENR","Data Status","Generation Method"]];
+const odMonthly=[["Trace ID","Month","Fiscal Year","Scenario","Legal Entity","Region","Cluster","Country","Function","Opening FTE","Hire FTE","Natural Attrition FTE","Forced Exit FTE","Total Exit FTE","Transfer In FTE","Transfer Out FTE","Signed Movements FTE","Closing FTE","Recurring Staff Cost","Recurring Employer Social Charges","Transformation Social Cost (ENR)","Recurring Total People Cost","Total Cash Cost Including ENR","Baseline Recurring Total People Cost","Recurring Savings vs Baseline","Net Savings After ENR","Cumulative Recurring Savings","Cumulative Net Savings","Data Status","Generation Method"]];
+const actualClosing=new Map(),actualRecurringCumulative=new Map(),actualNetCumulative=new Map();
+function allocateInteger(total,weights){
+  if(total<=0)return weights.map(()=>0);
+  const weightTotal=weights.reduce((sum,value)=>sum+Math.max(0,value),0);
+  if(!weightTotal){const result=weights.map(()=>0);result[0]=total;return result}
+  const exact=weights.map(value=>total*Math.max(0,value)/weightTotal),result=exact.map(Math.floor);
+  let remainder=total-result.reduce((sum,value)=>sum+value,0);
+  exact.map((value,index)=>({index,fraction:value-result[index]})).sort((a,b)=>b.fraction-a.fraction||a.index-b.index).slice(0,remainder).forEach(item=>result[item.index]++);
+  return result;
+}
+function finalVector(start,targetTotal){
+  const delta=targetTotal-start.reduce((sum,value)=>sum+value,0),changes=allocateInteger(Math.abs(delta),start);
+  return start.map((value,index)=>value+(delta<0?-changes[index]:changes[index]));
+}
+function trajectoryVector(start,final,targetTotal,key){
+  const startTotal=start.reduce((sum,value)=>sum+value,0),delta=targetTotal-startTotal;
+  if(!delta)return [...start];
+  const capacities=final.map((value,index)=>Math.abs(value-start[index])),schedule=[];
+  for(let level=0;level<Math.max(...capacities);level++)capacities.map((capacity,index)=>({capacity,index})).filter(item=>item.capacity>level).sort((a,b)=>hash(`${key}|${level}|${a.index}`)-hash(`${key}|${level}|${b.index}`)).forEach(item=>schedule.push(item.index));
+  const changes=start.map(()=>0);schedule.slice(0,Math.abs(delta)).forEach(index=>changes[index]++);
+  return start.map((value,index)=>value+(delta<0?-changes[index]:changes[index]));
+}
+function scenarioMonths(scenario){
+  if(scenario==="Baseline")return Array.from({length:37},(_,offset)=>addMonths(new Date(2026,5,1),offset));
   if(scenario==="Actual")return[0,1].map(offset=>addMonths(new Date(2026,6,1),offset));
   if(scenario==="Forecast")return Array.from({length:34},(_,offset)=>addMonths(new Date(2026,8,1),offset));
   return Array.from({length:36},(_,offset)=>addMonths(new Date(2026,6,1),offset));
 }
+function rampProgress(scenario,index){
+  if(scenario==="Baseline")return 0;
+  if(scenario==="Actual")return[index===0?.015:.03][0];
+  const segmentLengths=scenario==="Forecast"?[10,12,12]:[12,12,12],milestones=[.30,.70,1],monthNumber=index+1;
+  let elapsed=0,previous=0;
+  for(let segment=0;segment<segmentLengths.length;segment++){
+    const length=segmentLengths[segment],target=milestones[segment];
+    if(monthNumber<=elapsed+length)return previous+(target-previous)*(monthNumber-elapsed)/length;
+    elapsed+=length;previous=target;
+  }
+  return 1;
+}
+function aggregateTarget(scenario,fn,index,startTotal){
+  if(scenario==="Baseline")return startTotal;
+  if(scenario==="Actual")return odBaselineFte[fn]+Math.round((odPlanFinal[fn]-odBaselineFte[fn])*rampProgress(scenario,index));
+  const final=odScenarioFinal[scenario][fn],progress=rampProgress(scenario,index);
+  return startTotal+Math.round((final-startTotal)*progress);
+}
 function addOdMovement(events,scenario,month,type,index,fte,counterpartyIndex=-1,pairId=""){
+  if(!fte)return;
   const dimension=odDimensions[index],counterparty=counterpartyIndex>=0?odDimensions[counterpartyIndex]:null;
-  const sign=type==="Exit"||type==="Transfer Out"?-1:1,signedFte=sign*fte;
-  const staffImpact=Math.round(signedFte*dimension.monthlyStaffCost),socialImpact=Math.round(staffImpact*dimension.socialRate),totalImpact=staffImpact+socialImpact;
-  const movementId=traceId("ODM",scenario,month.toISOString(),type,index,pairId),method=type.startsWith("Transfer")?"Deterministic paired transfer":"Deterministic scenario movement";
-  events.push({index,type,fte,signedFte});
-  odMovements.push([movementId,movementId,month,fiscalYear(month),scenario,type,signedFte,dimension.entity,dimension.region,dimension.cluster,dimension.country,dimension.fn,counterparty?.entity||"",counterparty?.fn||"",pairId,staffImpact,socialImpact,totalImpact,"Synthetic",method]);
+  const sign=type==="Natural Attrition"||type==="Forced Exit"||type==="Transfer Out"?-1:1,signedFte=sign*fte;
+  const staffImpact=Math.round(signedFte*dimension.monthlyStaffCost),socialImpact=Math.round(staffImpact*dimension.socialRate),recurringImpact=staffImpact+socialImpact;
+  const enr=type==="Forced Exit"?Math.round(Math.abs(recurringImpact)*9*(.90+unit(`od-enr-country|${dimension.country}`)*.20)):0,totalCashImpact=recurringImpact+enr;
+  const movementId=traceId("ODM",scenario,month.toISOString(),type,index,pairId,fte),exitSubtype=type==="Natural Attrition"||type==="Forced Exit"?type:"";
+  const method=type.startsWith("Transfer")?"Paired D&T nearshore transfer":type==="Forced Exit"?"Target-driven forced exit with nine-month employer-cost ENR":"Target-driven deterministic movement";
+  events.push({index,type,fte,signedFte,enr});
+  odMovements.push([movementId,movementId,month,fiscalYear(month),scenario,type,exitSubtype,signedFte,dimension.entity,dimension.region,dimension.cluster,dimension.country,dimension.fn,counterparty?.entity||"",counterparty?.fn||"",pairId,staffImpact,socialImpact,enr,recurringImpact,totalCashImpact,"Synthetic",method]);
   trace.push([movementId,"OD_Movements",dimension.entity,dimension.country,dimension.fn,type,fiscalYear(month),method,SEED]);
 }
-function generateOdEvents(scenario,month,state){
-  const events=[],monthKey=`${month.getFullYear()}-${month.getMonth()+1}`,scenarioRate={Actual:.055,Budget:.035,Plan:.045,Forecast:.04}[scenario]||0;
-  for(let index=0;index<odDimensions.length;index++){
-    if(unit(`od-event|${scenario}|${monthKey}|${index}`)>=scenarioRate)continue;
-    const type=unit(`od-event-type|${scenario}|${monthKey}|${index}`)<({Actual:.46,Budget:.58,Plan:.50,Forecast:.43}[scenario]||.5)?"Hire":"Exit";
-    const fte=1+(unit(`od-event-size|${scenario}|${monthKey}|${index}`)>.82?1:0);
-    if(type==="Exit"&&state[index]<fte)continue;
-    addOdMovement(events,scenario,month,type,index,fte);
-  }
-  const transferCount=scenario==="Actual"?3:scenario==="Baseline"?0:4;
-  for(let transfer=0;transfer<transferCount;transfer++){
-    let source=hash(`od-transfer-source|${scenario}|${monthKey}|${transfer}`)%odDimensions.length;
-    let target=hash(`od-transfer-target|${scenario}|${monthKey}|${transfer}`)%odDimensions.length;
-    if(target===source)target=(target+1)%odDimensions.length;
-    const fte=1+(unit(`od-transfer-size|${scenario}|${monthKey}|${transfer}`)>.88?1:0);
-    if(state[source]<fte)continue;
-    const pairId=traceId("ODT",scenario,monthKey,transfer);
-    addOdMovement(events,scenario,month,"Transfer Out",source,fte,target,pairId);
-    addOdMovement(events,scenario,month,"Transfer In",target,fte,source,pairId);
-  }
-  return events;
-}
 function buildOdScenario(scenario){
-  const state=odDimensions.map((dimension,index)=>scenario==="Forecast"?actualClosing.get(index):dimension.baseFte);
-  const cumulative=odDimensions.map((_,index)=>scenario==="Forecast"?(actualCumulative.get(index)||0):0);
-  for(const month of odMonthsForScenario(scenario)){
-    const opening=[...state],events=generateOdEvents(scenario,month,state),movementTotals=odDimensions.map(()=>({Hire:0,Exit:0,"Transfer In":0,"Transfer Out":0,signed:0}));
-    for(const event of events){movementTotals[event.index][event.type]+=event.fte;movementTotals[event.index].signed+=event.signedFte;state[event.index]+=event.signedFte}
+  const startState=odDimensions.map((dimension,index)=>scenario==="Forecast"?actualClosing.get(index):dimension.baseFte),state=[...startState],organicState=[...startState],transferOffset=odDimensions.map(()=>0);
+  const recurringCumulative=odDimensions.map((_,index)=>scenario==="Forecast"?(actualRecurringCumulative.get(index)||0):0),netCumulative=odDimensions.map((_,index)=>scenario==="Forecast"?(actualNetCumulative.get(index)||0):0);
+  const startsByFunction={},finalsByFunction={};
+  for(const fn of FUNCTIONS){const indexes=odFunctionIndexes.get(fn),start=indexes.map(index=>startState[index]),startTotal=start.reduce((sum,value)=>sum+value,0),finalTotal=scenario==="Actual"?odBaselineFte[fn]+Math.round((odPlanFinal[fn]-odBaselineFte[fn])*.03):scenario==="Baseline"?startTotal:odScenarioFinal[scenario][fn];startsByFunction[fn]=start;finalsByFunction[fn]=finalVector(start,finalTotal)}
+  const forcedRunning=Object.fromEntries(FUNCTIONS.map(fn=>[fn,{total:0,forced:0}]));
+  const dtIndexes=odFunctionIndexes.get("D&T"),dtSource=[...dtIndexes].sort((a,b)=>odDimensions[b].monthlyStaffCost-odDimensions[a].monthlyStaffCost)[0],dtTarget=[...dtIndexes].sort((a,b)=>odDimensions[a].monthlyStaffCost-odDimensions[b].monthlyStaffCost)[0];
+  for(const [monthIndex,month] of scenarioMonths(scenario).entries()){
+    const opening=[...state],events=[];
+    for(const fn of FUNCTIONS){
+      const indexes=odFunctionIndexes.get(fn),start=startsByFunction[fn],final=finalsByFunction[fn],startTotal=start.reduce((sum,value)=>sum+value,0),targetTotal=aggregateTarget(scenario,fn,monthIndex,startTotal),target=trajectoryVector(start,final,targetTotal,`${scenario}|${fn}`);
+      indexes.forEach((index,localIndex)=>{
+        const delta=target[localIndex]-organicState[index];
+        if(delta>0)addOdMovement(events,scenario,month,"Hire",index,delta);
+        if(delta<0){
+          const exitFte=-delta,running=forcedRunning[fn],share=fn==="Finance"?.95:.30,newTotal=running.total+exitFte,desiredForced=Math.round(newTotal*share),forced=Math.max(0,Math.min(exitFte,desiredForced-running.forced));
+          addOdMovement(events,scenario,month,"Forced Exit",index,forced);addOdMovement(events,scenario,month,"Natural Attrition",index,exitFte-forced);running.total=newTotal;running.forced+=forced;
+        }
+        organicState[index]=target[localIndex];
+      });
+    }
+    const transferDue=scenario!=="Baseline"&&((scenario==="Actual"&&monthIndex===1)||(scenario!=="Actual"&&(monthIndex+1)%6===0));
+    if(transferDue&&organicState[dtSource]+transferOffset[dtSource]>1){const pairId=traceId("ODT",scenario,month.toISOString());addOdMovement(events,scenario,month,"Transfer Out",dtSource,1,dtTarget,pairId);addOdMovement(events,scenario,month,"Transfer In",dtTarget,1,dtSource,pairId);transferOffset[dtSource]--;transferOffset[dtTarget]++}
+    odDimensions.forEach((_,index)=>state[index]=organicState[index]+transferOffset[index]);
+    const movementTotals=odDimensions.map(()=>({Hire:0,"Natural Attrition":0,"Forced Exit":0,"Transfer In":0,"Transfer Out":0,signed:0,enr:0}));
+    for(const event of events){movementTotals[event.index][event.type]+=event.fte;movementTotals[event.index].signed+=event.signedFte;movementTotals[event.index].enr+=event.enr}
+    const staffByIndex=odDimensions.map(()=>0);
+    for(const fn of FUNCTIONS){
+      const indexes=odFunctionIndexes.get(fn),raw=indexes.map(index=>((opening[index]+state[index])/2)*odDimensions[index].monthlyStaffCost*(fn==="D&T"?.96+unit(`od-dt-cost-mix|${odDimensions[index].country}`)*.08:1));
+      if(scenario==="Baseline"){indexes.forEach(index=>staffByIndex[index]=Math.round(odDimensions[index].baseFte*odDimensions[index].monthlyStaffCost));continue}
+      const closingTotal=indexes.reduce((sum,index)=>sum+state[index],0),startTotal=indexes.reduce((sum,index)=>sum+startState[index],0);
+      let staffRatio;
+      if(fn!=="D&T")staffRatio=closingTotal/odBaselineFte[fn];
+      else if(scenario==="Plan")staffRatio=1-.10*Math.max(0,(closingTotal-odBaselineFte[fn])/(odPlanFinal[fn]-odBaselineFte[fn]));
+      else if(scenario==="Budget")staffRatio=1-.08*Math.max(0,(closingTotal-startTotal)/(odScenarioFinal.Budget[fn]-startTotal));
+      else if(scenario==="Actual")staffRatio=1-.10*Math.max(0,(closingTotal-odBaselineFte[fn])/(odPlanFinal[fn]-odBaselineFte[fn]));
+      else {const actualTotal=indexes.reduce((sum,index)=>sum+startState[index],0),actualRatio=1-.10*Math.max(0,(actualTotal-odBaselineFte[fn])/(odPlanFinal[fn]-odBaselineFte[fn]),0),progress=(closingTotal-actualTotal)/(odScenarioFinal.Forecast[fn]-actualTotal);staffRatio=actualRatio+(.905-actualRatio)*Math.max(0,Math.min(1,progress))}
+      const allocated=allocateInteger(Math.round(odBaselineStaff[fn]*staffRatio),raw);indexes.forEach((index,localIndex)=>staffByIndex[index]=allocated[localIndex]);
+    }
     odDimensions.forEach((dimension,index)=>{
-      const movements=movementTotals[index],averageFte=(opening[index]+state[index])/2,staffCost=Math.round(averageFte*dimension.monthlyStaffCost),social=Math.round(staffCost*dimension.socialRate),total=staffCost+social;
-      const baselineStaff=Math.round(dimension.baseFte*dimension.monthlyStaffCost),baselineSocial=Math.round(baselineStaff*dimension.socialRate),baselineTotal=baselineStaff+baselineSocial,monthlySavings=baselineTotal-total;
-      cumulative[index]+=monthlySavings;
+      const movements=movementTotals[index],staffCost=staffByIndex[index],social=Math.round(staffCost*dimension.socialRate),enr=movements.enr,recurringTotal=staffCost+social,totalCash=recurringTotal+enr;
+      const baselineStaff=Math.round(dimension.baseFte*dimension.monthlyStaffCost),baselineSocial=Math.round(baselineStaff*dimension.socialRate),baselineTotal=baselineStaff+baselineSocial,recurringSavings=baselineTotal-recurringTotal,netSavings=recurringSavings-enr;
+      recurringCumulative[index]+=recurringSavings;netCumulative[index]+=netSavings;
       const id=traceId("ODMTH",scenario,month.toISOString(),dimension.entity,dimension.fn);
-      odMonthly.push([id,month,fiscalYear(month),scenario,dimension.entity,dimension.region,dimension.cluster,dimension.country,dimension.fn,opening[index],movements.Hire,movements.Exit,movements["Transfer In"],movements["Transfer Out"],movements.signed,state[index],staffCost,social,total,baselineTotal,monthlySavings,cumulative[index],"Synthetic",scenario==="Baseline"?"Frozen June 2026 baseline":"Deterministic opening-movement-closing ledger"]);
-      trace.push([id,"OD_Monthly",dimension.entity,dimension.country,dimension.fn,scenario,fiscalYear(month),"Deterministic OD monthly ledger",SEED]);
+      odMonthly.push([id,month,fiscalYear(month),scenario,dimension.entity,dimension.region,dimension.cluster,dimension.country,dimension.fn,opening[index],movements.Hire,movements["Natural Attrition"],movements["Forced Exit"],movements["Natural Attrition"]+movements["Forced Exit"],movements["Transfer In"],movements["Transfer Out"],movements.signed,state[index],staffCost,social,enr,recurringTotal,totalCash,baselineTotal,recurringSavings,netSavings,recurringCumulative[index],netCumulative[index],"Synthetic",scenario==="Baseline"?"Frozen June 2026 baseline ledger":"Target-driven opening-movement-closing and transformation economics ledger"]);
+      trace.push([id,"OD_Monthly",dimension.entity,dimension.country,dimension.fn,scenario,fiscalYear(month),"Target-driven OD monthly ledger with recurring and ENR economics",SEED]);
     });
   }
-  if(scenario==="Actual")odDimensions.forEach((_,index)=>{actualClosing.set(index,state[index]);actualCumulative.set(index,cumulative[index])});
+  if(scenario==="Actual")odDimensions.forEach((_,index)=>{actualClosing.set(index,state[index]);actualRecurringCumulative.set(index,recurringCumulative[index]);actualNetCumulative.set(index,netCumulative[index])});
 }
 for(const scenario of ["Baseline","Budget","Plan","Actual","Forecast"])buildOdScenario(scenario);
 appendBook(workbook,"OD_Movements",odMovements);
 appendBook(workbook,"OD_Monthly",odMonthly);
 
-appendBook(workbook,"Data Dictionary",[["Sheet","Field / Range","Definition","Status"],["Mapping","A:F","Synthetic legal entity geography reference","Synthetic"],["Cost Baseline","A:P","FY25/26 annual recurring cost baseline","Synthetic"],["Lever BCase - Updated","A:AV","Annual synthetic transformation initiatives","Synthetic"],["Budget FY26-27","A:S","Explicit budget impacts for every entity/function/category","Synthetic"],["Monthly_Data","A:N","Reconciled monthly baseline facts","Synthetic"],["KPI_Catalog","A:K","KPI definitions, current, target and global benchmark","Synthetic except illustrative benchmarks"],["KPI_History","A:H","Monthly KPI observations by geography","Synthetic"],["OD_Movements","A:T","Hire, Exit, Transfer In and Transfer Out events; signed FTE and monthly people-cost impact by organisation dimension and scenario","Synthetic"],["OD_Monthly","A:X","Monthly OD ledger from frozen June 2026 baseline, with actuals through August 2026 and forecast thereafter; opening, movement, closing FTE, people costs and savings","Synthetic"],["Generation Log","A:I","Traceability metadata for generated facts, including OD movement and monthly records","Synthetic"]]);
+trace.push([traceId("ODA","TARGETS"),"OD_Assumptions","","","ALL","Plan FTE targets","June 2026-June 2029",`Group ramp 30%/70%/100%; final targets ${FUNCTIONS.map(fn=>`${fn} ${odPlanFinal[fn]}`).join(", ")}`,SEED]);
+trace.push([traceId("ODA","ENR"),"OD_Assumptions","","","ALL","Transformation Social Cost (ENR)","Movement month","Forced Exit only; nine months of employer cost with deterministic country factor 90%-110%",SEED]);
+trace.push([traceId("ODA","DT"),"OD_Assumptions","","","D&T","Nearshoring/internalization economics","FY26/27-FY28/29","D&T +2% final FTE and -10% final recurring staff cost; paired transfers remain group neutral",SEED]);
+appendBook(workbook,"Data Dictionary",[["Sheet","Field / Range","Definition","Status"],["Mapping","A:F","Synthetic legal entity geography reference","Synthetic"],["Cost Baseline","A:P","FY25/26 annual recurring cost baseline","Synthetic"],["Lever BCase - Updated","A:AV","Annual synthetic transformation initiatives","Synthetic"],["Budget FY26-27","A:S","Explicit budget impacts for every entity/function/category","Synthetic"],["Monthly_Data","A:N","Reconciled monthly baseline facts","Synthetic"],["KPI_Catalog","A:K","KPI definitions, current, target and global benchmark","Synthetic except illustrative benchmarks"],["KPI_History","A:H","Monthly KPI observations by geography","Synthetic"],["OD_Movements","A:W","Hire, Natural Attrition, Forced Exit, Transfer In and Transfer Out events; exit subtype, signed FTE, recurring cost impact and one-off ENR impact","Synthetic"],["OD_Movements","S:S","Transformation Social Cost (ENR): one-off cash cost only for Forced Exit, equal to nine months of employer cost with deterministic country variation","Synthetic"],["OD_Monthly","A:AD","Monthly OD ledger from frozen June 2026 baseline, Plan/Budget from July 2026, Actual July-August 2026 and Forecast September 2026-June 2029","Synthetic"],["OD_Monthly","S:W","Recurring Staff Cost, Recurring Employer Social Charges, Transformation Social Cost (ENR), Recurring Total People Cost and Total Cash Cost Including ENR","Synthetic"],["OD_Monthly","X:AB","Baseline Recurring Total People Cost, Recurring Savings vs Baseline, Net Savings After ENR, Cumulative Recurring Savings and Cumulative Net Savings","Synthetic"],["Generation Log","A:I","Traceability metadata plus explicit OD target, ENR and D&T economics assumptions","Synthetic"]]);
 appendBook(workbook,"Generation Log",[["Trace ID","Dataset","Legal Entity","Country","Function","Category / KPI","Period","Generation Method","Seed"],...trace]);
 
 workbook.Props={Title:"Gooduelle Performance Demo - Traceable Synthetic Data",Subject:"Fully synthetic and traceable demonstration dataset",Author:"Gooduelle Demo Generator",Company:"Gooduelle",Comments:`Generated deterministically with seed ${SEED}. No operational source data used.`};
