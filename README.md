@@ -23,7 +23,7 @@ The dashboard opens with built-in demo data. You can also import `Gooduelle_Perf
 
 - **Coûts par fonction**: recurring cost baseline, forecast and budget comparisons.
 - **KPIs par fonction**: generic and function-specific performance indicators.
-- **OD Monitoring**: planned and actual FTE movements, staff costs, employer social charges, cumulative savings and annual budget impacts from FY26/27 to FY28/29. The OD baseline is frozen at June 2026 and synthetic actuals run through August 2026.
+- **OD Monitoring**: planned and actual FTE movements, recurring staff costs, recurring employer social charges, exceptional transformation social costs (ENR), cumulative savings and annual budget impacts from FY26/27 to FY28/29. The OD baseline is frozen at June 2026 and synthetic actuals run through August 2026.
 
 ## Traceability
 
