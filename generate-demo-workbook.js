@@ -58,32 +58,52 @@ const kpiCatalog=[["KPI ID","Function","KPI Name","Unit","Direction","Current","
 for(const [fn,kpis] of Object.entries(KPI_BENCHMARKS))for(const [name,unitLabel,benchmark] of kpis){const id=traceId("KPI",fn,name),direction=/coût|ETP Accounts|externes/i.test(name)?"Lower":"Higher",current=unitLabel.includes("M€")?pct(`kpi-current|${id}`,2.1,26):unitLabel.includes("k€")?pct(`kpi-current|${id}`,1.5,2.5):pct(`kpi-current|${id}`,8,96),target=direction==="Lower"?current*.84:current*1.12;kpiCatalog.push([id,fn,name,unitLabel,direction,current,target,benchmark,"Synthetic","Illustrative benchmark","Independent KPI model"]);for(const [,region,cluster,country] of GEOS)for(let m=0;m<30;m++){const date=addMonths(new Date(2024,0,1),m),trend=(m/29-.5)*(direction==="Lower"?-1:1)*current*.08,noise=pct(`kpi-hist|${id}|${cluster}|${country}|${m}`,-current*.018,current*.018);kpiHistory.push([id,date,fn,cluster,country,Math.max(0,current+trend+noise),"Synthetic","Deterministic trend plus bounded noise"])}trace.push([id,"KPI Catalog","","",fn,name,"Current/Target","Independent KPI model",SEED])}
 appendBook(workbook,"KPI_Catalog",kpiCatalog);appendBook(workbook,"KPI_History",kpiHistory);
 
+// Program scope: 6 support functions with fixed June-2026 baseline FTE totals, plus a virtual "Operations"
+// function that carries the 8450 FTE out of scope. Country/cluster split is preserved proportionally.
+const OD_INSCOPE_FUNCTIONS=FUNCTIONS;
+const OD_OUTSCOPE_FUNCTION="Operations";
+const OD_FUNCTIONS_ALL=[...OD_INSCOPE_FUNCTIONS,OD_OUTSCOPE_FUNCTION];
+const OD_BASELINE_TARGETS={"D&T":200,Finance:300,HR:200,Supply:350,Marketing:100,Sales:400,[OD_OUTSCOPE_FUNCTION]:8450};
+const OD_INSCOPE_TOTAL=OD_INSCOPE_FUNCTIONS.reduce((sum,fn)=>sum+OD_BASELINE_TARGETS[fn],0); // 1550
+const OD_OUTSCOPE_TOTAL=OD_BASELINE_TARGETS[OD_OUTSCOPE_FUNCTION]; // 8450
+const OD_GROUP_TOTAL=OD_INSCOPE_TOTAL+OD_OUTSCOPE_TOTAL; // 10000
 const odDimensions=[];
-for(const [entity,region,cluster,country] of GEOS)for(const fn of FUNCTIONS){
-  const baseFte=12+Math.floor(unit(`od-base-fte|${entity}|${fn}`)*74);
+for(const [entity,region,cluster,country] of GEOS)for(const fn of OD_FUNCTIONS_ALL){
+  const rawWeight=12+Math.floor(unit(`od-base-fte|${entity}|${fn}`)*74);
   const annualStaffCost=amount(`od-staff-cost|${entity}|${fn}`,42000,112000,500);
   const socialRate=pct(`od-social-rate|${country}`,.17,.34);
-  odDimensions.push({entity,region,cluster,country,fn,baseFte,monthlyStaffCost:annualStaffCost/12,socialRate});
+  odDimensions.push({entity,region,cluster,country,fn,rawWeight,baseFte:0,monthlyStaffCost:annualStaffCost/12,socialRate,scope:OD_INSCOPE_FUNCTIONS.includes(fn)?"In-scope":"Out-of-scope"});
 }
-const odFunctionIndexes=new Map(FUNCTIONS.map(fn=>[fn,odDimensions.map((d,index)=>d.fn===fn?index:-1).filter(index=>index>=0)]));
-const odBaselineFte=Object.fromEntries(FUNCTIONS.map(fn=>[fn,odFunctionIndexes.get(fn).reduce((sum,index)=>sum+odDimensions[index].baseFte,0)]));
-const odBaselineStaff=Object.fromEntries(FUNCTIONS.map(fn=>[fn,odFunctionIndexes.get(fn).reduce((sum,index)=>sum+Math.round(odDimensions[index].baseFte*odDimensions[index].monthlyStaffCost),0)]));
-const odBaselineGroup=Object.values(odBaselineFte).reduce((sum,value)=>sum+value,0);
-const odPlanFinal={
-  "D&T":Math.round(odBaselineFte["D&T"]*1.02),
-  Finance:Math.round(odBaselineFte.Finance*.50),
-  HR:Math.round(odBaselineFte.HR*.95),
-  Marketing:Math.round(odBaselineFte.Marketing*.975),
-  Sales:Math.round(odBaselineFte.Sales*.975)
-};
-odPlanFinal.Supply=Math.round(odBaselineGroup*.90)-Object.values(odPlanFinal).reduce((sum,value)=>sum+value,0);
+const odFunctionIndexes=new Map(OD_FUNCTIONS_ALL.map(fn=>[fn,odDimensions.map((d,index)=>d.fn===fn?index:-1).filter(index=>index>=0)]));
+// Rescale raw weights to hit exact per-function baseline totals while preserving proportional split
+for(const fn of OD_FUNCTIONS_ALL){
+  const indexes=odFunctionIndexes.get(fn),weights=indexes.map(index=>odDimensions[index].rawWeight),allocated=allocateInteger(OD_BASELINE_TARGETS[fn],weights);
+  indexes.forEach((index,localIndex)=>{odDimensions[index].baseFte=allocated[localIndex]});
+}
+const odBaselineFte=Object.fromEntries(OD_FUNCTIONS_ALL.map(fn=>[fn,odFunctionIndexes.get(fn).reduce((sum,index)=>sum+odDimensions[index].baseFte,0)]));
+const odBaselineStaff=Object.fromEntries(OD_FUNCTIONS_ALL.map(fn=>[fn,odFunctionIndexes.get(fn).reduce((sum,index)=>sum+Math.round(odDimensions[index].baseFte*odDimensions[index].monthlyStaffCost),0)]));
+const odBaselineGroupInScope=OD_INSCOPE_FUNCTIONS.reduce((sum,fn)=>sum+odBaselineFte[fn],0);
+const odBaselineStaffGroupInScope=OD_INSCOPE_FUNCTIONS.reduce((sum,fn)=>sum+odBaselineStaff[fn],0);
+// Per-function FTE ratios: Finance -50%, Sales/Marketing -2.5%, HR -5%, D&T +2%.
+// Supply is derived so that total in-scope monthly staff cost lands at -10% at FY28/29.
+// D&T also carries -10% per-FTE recurring staff cost (nearshoring).
+const OD_FTE_RATIO_TARGETS={"D&T":1.02,Finance:.50,HR:.95,Marketing:.975,Sales:.975};
+const OD_STAFF_COST_PER_FTE_TARGETS={"D&T":.90,Finance:1.00,HR:1.00,Marketing:1.00,Sales:1.00,Supply:1.00};
+// Compute Supply's final FTE so that Sum(final staff cost) = 0.90 * Sum(baseline staff cost) over the 6 in-scope functions.
+const odTargetGroupStaff=Math.round(odBaselineStaffGroupInScope*.90);
+const odFixedFinalStaff=OD_INSCOPE_FUNCTIONS.filter(fn=>fn!=="Supply").reduce((sum,fn)=>sum+odBaselineStaff[fn]*OD_FTE_RATIO_TARGETS[fn]*OD_STAFF_COST_PER_FTE_TARGETS[fn],0);
+const odSupplyFinalStaff=odTargetGroupStaff-odFixedFinalStaff;
+const odSupplyFinalFteRatio=odSupplyFinalStaff/odBaselineStaff.Supply; // Supply per-FTE cost unchanged, so ratio equals FTE ratio
+OD_FTE_RATIO_TARGETS.Supply=odSupplyFinalFteRatio;
+const odPlanFinal=Object.fromEntries(OD_INSCOPE_FUNCTIONS.map(fn=>[fn,Math.round(odBaselineFte[fn]*OD_FTE_RATIO_TARGETS[fn])]));
+odPlanFinal[OD_OUTSCOPE_FUNCTION]=odBaselineFte[OD_OUTSCOPE_FUNCTION]; // Out-of-scope FTE unchanged
 const odScenarioFinal={
   Plan:odPlanFinal,
-  Budget:Object.fromEntries(FUNCTIONS.map(fn=>[fn,odBaselineFte[fn]+Math.round((odPlanFinal[fn]-odBaselineFte[fn])*(fn==="D&T"?.85:.93))])),
-  Forecast:Object.fromEntries(FUNCTIONS.map(fn=>[fn,odBaselineFte[fn]+Math.round((odPlanFinal[fn]-odBaselineFte[fn])*({"D&T":.93,Finance:.98,HR:.90,Supply:1.01,Marketing:.90,Sales:1.05}[fn]))]))
+  Budget:Object.fromEntries(OD_FUNCTIONS_ALL.map(fn=>[fn,fn===OD_OUTSCOPE_FUNCTION?odBaselineFte[fn]:odBaselineFte[fn]+Math.round((odPlanFinal[fn]-odBaselineFte[fn])*(fn==="D&T"?.85:.93))])),
+  Forecast:Object.fromEntries(OD_FUNCTIONS_ALL.map(fn=>[fn,fn===OD_OUTSCOPE_FUNCTION?odBaselineFte[fn]:odBaselineFte[fn]+Math.round((odPlanFinal[fn]-odBaselineFte[fn])*({"D&T":.93,Finance:.98,HR:.90,Supply:1.01,Marketing:.90,Sales:1.05}[fn]))]))
 };
-const odMovements=[["Trace ID","Movement ID","Month","Fiscal Year","Scenario","Movement Type","Exit Subtype","Signed FTE","Legal Entity","Region","Cluster","Country","Function","Counterparty Legal Entity","Counterparty Function","Transfer Pair ID","Recurring Staff Cost Impact","Recurring Employer Social Charges Impact","Transformation Social Cost (ENR)","Recurring Total People Cost Impact","Total Cash Cost Impact Including ENR","Data Status","Generation Method"]];
-const odMonthly=[["Trace ID","Month","Fiscal Year","Scenario","Legal Entity","Region","Cluster","Country","Function","Opening FTE","Hire FTE","Natural Attrition FTE","Forced Exit FTE","Total Exit FTE","Transfer In FTE","Transfer Out FTE","Signed Movements FTE","Closing FTE","Recurring Staff Cost","Recurring Employer Social Charges","Transformation Social Cost (ENR)","Recurring Total People Cost","Total Cash Cost Including ENR","Baseline Recurring Total People Cost","Recurring Savings vs Baseline","Net Savings After ENR","Cumulative Recurring Savings","Cumulative Net Savings","Data Status","Generation Method"]];
+const odMovements=[["Trace ID","Movement ID","Month","Fiscal Year","Scenario","Movement Type","Exit Subtype","Signed FTE","Legal Entity","Region","Cluster","Country","Function","Program Scope","Counterparty Legal Entity","Counterparty Function","Transfer Pair ID","Recurring Staff Cost Impact","Recurring Employer Social Charges Impact","Transformation Social Cost (ENR)","Recurring Total People Cost Impact","Total Cash Cost Impact Including ENR","Data Status","Generation Method"]];
+const odMonthly=[["Trace ID","Month","Fiscal Year","Scenario","Legal Entity","Region","Cluster","Country","Function","Program Scope","Opening FTE","Hire FTE","Natural Attrition FTE","Forced Exit FTE","Total Exit FTE","Transfer In FTE","Transfer Out FTE","Signed Movements FTE","Closing FTE","Recurring Staff Cost","Recurring Employer Social Charges","Transformation Social Cost (ENR)","Recurring Total People Cost","Total Cash Cost Including ENR","Baseline Recurring Total People Cost","Recurring Savings vs Baseline","Net Savings After ENR","Cumulative Recurring Savings","Cumulative Net Savings","Data Status","Generation Method"]];
 const actualClosing=new Map(),actualRecurringCumulative=new Map(),actualNetCumulative=new Map();
 function allocateInteger(total,weights){
   if(total<=0)return weights.map(()=>0);
@@ -139,19 +159,37 @@ function addOdMovement(events,scenario,month,type,index,fte,counterpartyIndex=-1
   const movementId=traceId("ODM",scenario,month.toISOString(),type,index,pairId,fte),exitSubtype=type==="Natural Attrition"||type==="Forced Exit"?type:"";
   const method=type.startsWith("Transfer")?"Paired D&T nearshore transfer":type==="Forced Exit"?"Target-driven forced exit with nine-month employer-cost ENR":"Target-driven deterministic movement";
   events.push({index,type,fte,signedFte,enr});
-  odMovements.push([movementId,movementId,month,fiscalYear(month),scenario,type,exitSubtype,signedFte,dimension.entity,dimension.region,dimension.cluster,dimension.country,dimension.fn,counterparty?.entity||"",counterparty?.fn||"",pairId,staffImpact,socialImpact,enr,recurringImpact,totalCashImpact,"Synthetic",method]);
+  odMovements.push([movementId,movementId,month,fiscalYear(month),scenario,type,exitSubtype,signedFte,dimension.entity,dimension.region,dimension.cluster,dimension.country,dimension.fn,dimension.scope,counterparty?.entity||"",counterparty?.fn||"",pairId,staffImpact,socialImpact,enr,recurringImpact,totalCashImpact,"Synthetic",method]);
   trace.push([movementId,"OD_Movements",dimension.entity,dimension.country,dimension.fn,type,fiscalYear(month),method,SEED]);
+}
+// Staff-cost per-FTE ratio for scenario/function at a given monthly progress in [0,1].
+// In-scope functions ramp from 1.00 to OD_STAFF_COST_PER_FTE_TARGETS[fn]. Out-of-scope keeps 1.00 always.
+function costPerFteRatio(scenario,fn,progress){
+  if(fn===OD_OUTSCOPE_FUNCTION)return 1;
+  const finalRatio=OD_STAFF_COST_PER_FTE_TARGETS[fn]??1;
+  if(scenario==="Baseline")return 1;
+  if(scenario==="Budget")return 1+(finalRatio-1)*progress*.85;
+  return 1+(finalRatio-1)*progress;
 }
 function buildOdScenario(scenario){
   const startState=odDimensions.map((dimension,index)=>scenario==="Forecast"?actualClosing.get(index):dimension.baseFte),state=[...startState],organicState=[...startState],transferOffset=odDimensions.map(()=>0);
   const recurringCumulative=odDimensions.map((_,index)=>scenario==="Forecast"?(actualRecurringCumulative.get(index)||0):0),netCumulative=odDimensions.map((_,index)=>scenario==="Forecast"?(actualNetCumulative.get(index)||0):0);
   const startsByFunction={},finalsByFunction={};
-  for(const fn of FUNCTIONS){const indexes=odFunctionIndexes.get(fn),start=indexes.map(index=>startState[index]),startTotal=start.reduce((sum,value)=>sum+value,0),finalTotal=scenario==="Actual"?odBaselineFte[fn]+Math.round((odPlanFinal[fn]-odBaselineFte[fn])*.03):scenario==="Baseline"?startTotal:odScenarioFinal[scenario][fn];startsByFunction[fn]=start;finalsByFunction[fn]=finalVector(start,finalTotal)}
-  const forcedRunning=Object.fromEntries(FUNCTIONS.map(fn=>[fn,{total:0,forced:0}]));
+  for(const fn of OD_FUNCTIONS_ALL){
+    const indexes=odFunctionIndexes.get(fn),start=indexes.map(index=>startState[index]),startTotal=start.reduce((sum,value)=>sum+value,0);
+    let finalTotal;
+    if(fn===OD_OUTSCOPE_FUNCTION)finalTotal=startTotal;
+    else if(scenario==="Actual")finalTotal=odBaselineFte[fn]+Math.round((odPlanFinal[fn]-odBaselineFte[fn])*.03);
+    else if(scenario==="Baseline")finalTotal=startTotal;
+    else finalTotal=odScenarioFinal[scenario][fn];
+    startsByFunction[fn]=start;finalsByFunction[fn]=finalVector(start,finalTotal);
+  }
+  const forcedRunning=Object.fromEntries(OD_INSCOPE_FUNCTIONS.map(fn=>[fn,{total:0,forced:0}]));
   const dtIndexes=odFunctionIndexes.get("D&T"),dtSource=[...dtIndexes].sort((a,b)=>odDimensions[b].monthlyStaffCost-odDimensions[a].monthlyStaffCost)[0],dtTarget=[...dtIndexes].sort((a,b)=>odDimensions[a].monthlyStaffCost-odDimensions[b].monthlyStaffCost)[0];
   for(const [monthIndex,month] of scenarioMonths(scenario).entries()){
     const opening=[...state],events=[];
-    for(const fn of FUNCTIONS){
+    // Only in-scope functions generate movements. Out-of-scope Operations stays flat.
+    for(const fn of OD_INSCOPE_FUNCTIONS){
       const indexes=odFunctionIndexes.get(fn),start=startsByFunction[fn],final=finalsByFunction[fn],startTotal=start.reduce((sum,value)=>sum+value,0),targetTotal=aggregateTarget(scenario,fn,monthIndex,startTotal),target=trajectoryVector(start,final,targetTotal,`${scenario}|${fn}`);
       indexes.forEach((index,localIndex)=>{
         const delta=target[localIndex]-organicState[index];
@@ -169,25 +207,32 @@ function buildOdScenario(scenario){
     const movementTotals=odDimensions.map(()=>({Hire:0,"Natural Attrition":0,"Forced Exit":0,"Transfer In":0,"Transfer Out":0,signed:0,enr:0}));
     for(const event of events){movementTotals[event.index][event.type]+=event.fte;movementTotals[event.index].signed+=event.signedFte;movementTotals[event.index].enr+=event.enr}
     const staffByIndex=odDimensions.map(()=>0);
-    for(const fn of FUNCTIONS){
-      const indexes=odFunctionIndexes.get(fn),raw=indexes.map(index=>((opening[index]+state[index])/2)*odDimensions[index].monthlyStaffCost*(fn==="D&T"?.96+unit(`od-dt-cost-mix|${odDimensions[index].country}`)*.08:1));
+    for(const fn of OD_FUNCTIONS_ALL){
+      const indexes=odFunctionIndexes.get(fn);
+      // Baseline scenario: freeze at June-2026 baseline for every function including Operations.
       if(scenario==="Baseline"){indexes.forEach(index=>staffByIndex[index]=Math.round(odDimensions[index].baseFte*odDimensions[index].monthlyStaffCost));continue}
-      const closingTotal=indexes.reduce((sum,index)=>sum+state[index],0),startTotal=indexes.reduce((sum,index)=>sum+startState[index],0);
-      let staffRatio;
-      if(fn!=="D&T")staffRatio=closingTotal/odBaselineFte[fn];
-      else if(scenario==="Plan")staffRatio=1-.10*Math.max(0,(closingTotal-odBaselineFte[fn])/(odPlanFinal[fn]-odBaselineFte[fn]));
-      else if(scenario==="Budget")staffRatio=1-.08*Math.max(0,(closingTotal-startTotal)/(odScenarioFinal.Budget[fn]-startTotal));
-      else if(scenario==="Actual")staffRatio=1-.10*Math.max(0,(closingTotal-odBaselineFte[fn])/(odPlanFinal[fn]-odBaselineFte[fn]));
-      else {const actualTotal=indexes.reduce((sum,index)=>sum+startState[index],0),actualRatio=1-.10*Math.max(0,(actualTotal-odBaselineFte[fn])/(odPlanFinal[fn]-odBaselineFte[fn]),0),progress=(closingTotal-actualTotal)/(odScenarioFinal.Forecast[fn]-actualTotal);staffRatio=actualRatio+(.905-actualRatio)*Math.max(0,Math.min(1,progress))}
-      const allocated=allocateInteger(Math.round(odBaselineStaff[fn]*staffRatio),raw);indexes.forEach((index,localIndex)=>staffByIndex[index]=allocated[localIndex]);
+      // Out-of-scope stays at baseline staff cost in every scenario.
+      if(fn===OD_OUTSCOPE_FUNCTION){indexes.forEach(index=>staffByIndex[index]=Math.round(odDimensions[index].baseFte*odDimensions[index].monthlyStaffCost));continue}
+      // Progress towards the final per-FTE cost reduction, aligned with FTE trajectory milestones.
+      let progress;
+      if(scenario==="Actual")progress=rampProgress("Actual",monthIndex);
+      else if(scenario==="Forecast"){const actualProgress=rampProgress("Actual",1);progress=actualProgress+(1-actualProgress)*rampProgress("Forecast",monthIndex)}
+      else progress=rampProgress(scenario,monthIndex);
+      const finalRatio=OD_STAFF_COST_PER_FTE_TARGETS[fn]??1,perFteMultiplier=1+(finalRatio-1)*progress;
+      // Distribute the function total across entities based on FTE-weighted expected cost (with D&T country mix).
+      const raw=indexes.map(index=>((opening[index]+state[index])/2)*odDimensions[index].monthlyStaffCost*(fn==="D&T"?.96+unit(`od-dt-cost-mix|${odDimensions[index].country}`)*.08:1));
+      const closingTotal=indexes.reduce((sum,index)=>sum+state[index],0);
+      const functionTarget=Math.round(closingTotal*(odBaselineStaff[fn]/odBaselineFte[fn])*perFteMultiplier);
+      const allocated=allocateInteger(functionTarget,raw);indexes.forEach((index,localIndex)=>staffByIndex[index]=allocated[localIndex]);
     }
     odDimensions.forEach((dimension,index)=>{
       const movements=movementTotals[index],staffCost=staffByIndex[index],social=Math.round(staffCost*dimension.socialRate),enr=movements.enr,recurringTotal=staffCost+social,totalCash=recurringTotal+enr;
       const baselineStaff=Math.round(dimension.baseFte*dimension.monthlyStaffCost),baselineSocial=Math.round(baselineStaff*dimension.socialRate),baselineTotal=baselineStaff+baselineSocial,recurringSavings=baselineTotal-recurringTotal,netSavings=recurringSavings-enr;
       recurringCumulative[index]+=recurringSavings;netCumulative[index]+=netSavings;
       const id=traceId("ODMTH",scenario,month.toISOString(),dimension.entity,dimension.fn);
-      odMonthly.push([id,month,fiscalYear(month),scenario,dimension.entity,dimension.region,dimension.cluster,dimension.country,dimension.fn,opening[index],movements.Hire,movements["Natural Attrition"],movements["Forced Exit"],movements["Natural Attrition"]+movements["Forced Exit"],movements["Transfer In"],movements["Transfer Out"],movements.signed,state[index],staffCost,social,enr,recurringTotal,totalCash,baselineTotal,recurringSavings,netSavings,recurringCumulative[index],netCumulative[index],"Synthetic",scenario==="Baseline"?"Frozen June 2026 baseline ledger":"Target-driven opening-movement-closing and transformation economics ledger"]);
-      trace.push([id,"OD_Monthly",dimension.entity,dimension.country,dimension.fn,scenario,fiscalYear(month),"Target-driven OD monthly ledger with recurring and ENR economics",SEED]);
+      const method=scenario==="Baseline"?"Frozen June 2026 baseline ledger":(dimension.scope==="Out-of-scope"?"Out-of-scope Operations ledger frozen at June 2026 baseline":"Target-driven opening-movement-closing and transformation economics ledger");
+      odMonthly.push([id,month,fiscalYear(month),scenario,dimension.entity,dimension.region,dimension.cluster,dimension.country,dimension.fn,dimension.scope,opening[index],movements.Hire,movements["Natural Attrition"],movements["Forced Exit"],movements["Natural Attrition"]+movements["Forced Exit"],movements["Transfer In"],movements["Transfer Out"],movements.signed,state[index],staffCost,social,enr,recurringTotal,totalCash,baselineTotal,recurringSavings,netSavings,recurringCumulative[index],netCumulative[index],"Synthetic",method]);
+      trace.push([id,"OD_Monthly",dimension.entity,dimension.country,dimension.fn,scenario,fiscalYear(month),method,SEED]);
     });
   }
   if(scenario==="Actual")odDimensions.forEach((_,index)=>{actualClosing.set(index,state[index]);actualRecurringCumulative.set(index,recurringCumulative[index]);actualNetCumulative.set(index,netCumulative[index])});
@@ -196,10 +241,12 @@ for(const scenario of ["Baseline","Budget","Plan","Actual","Forecast"])buildOdSc
 appendBook(workbook,"OD_Movements",odMovements);
 appendBook(workbook,"OD_Monthly",odMonthly);
 
-trace.push([traceId("ODA","TARGETS"),"OD_Assumptions","","","ALL","Plan FTE targets","June 2026-June 2029",`Group ramp 30%/70%/100%; final targets ${FUNCTIONS.map(fn=>`${fn} ${odPlanFinal[fn]}`).join(", ")}`,SEED]);
+trace.push([traceId("ODA","SCOPE"),"OD_Assumptions","","","ALL","Program scope","June 2026 baseline",`In-scope program: 6 support functions totalling ${OD_INSCOPE_TOTAL} FTE (Sales ${OD_BASELINE_TARGETS.Sales}, Supply ${OD_BASELINE_TARGETS.Supply}, Finance ${OD_BASELINE_TARGETS.Finance}, HR ${OD_BASELINE_TARGETS.HR}, D&T ${OD_BASELINE_TARGETS["D&T"]}, Marketing ${OD_BASELINE_TARGETS.Marketing}); virtual Operations function carries ${OD_OUTSCOPE_TOTAL} FTE out of scope for a group total of ${OD_GROUP_TOTAL} FTE`,SEED]);
+trace.push([traceId("ODA","TARGETS"),"OD_Assumptions","","","ALL","Plan FTE and staff-cost targets","June 2026-June 2029",`Group in-scope staff-cost milestones -3% end FY26/27, -7% end FY27/28, -10% end FY28/29; final FTE Finance -50%, Sales -2.5%, Marketing -2.5%, HR -5%, D&T +2%, Supply calibrated (${odPlanFinal.Supply} FTE, ${((odPlanFinal.Supply/odBaselineFte.Supply-1)*100).toFixed(1)}%); Operations out-of-scope FTE frozen at ${OD_OUTSCOPE_TOTAL}`,SEED]);
 trace.push([traceId("ODA","ENR"),"OD_Assumptions","","","ALL","Transformation Social Cost (ENR)","Movement month","Forced Exit only; nine months of employer cost with deterministic country factor 90%-110%",SEED]);
-trace.push([traceId("ODA","DT"),"OD_Assumptions","","","D&T","Nearshoring/internalization economics","FY26/27-FY28/29","D&T +2% final FTE and -10% final recurring staff cost; paired transfers remain group neutral",SEED]);
-appendBook(workbook,"Data Dictionary",[["Sheet","Field / Range","Definition","Status"],["Mapping","A:F","Synthetic legal entity geography reference","Synthetic"],["Cost Baseline","A:P","FY25/26 annual recurring cost baseline","Synthetic"],["Lever BCase - Updated","A:AV","Annual synthetic transformation initiatives","Synthetic"],["Budget FY26-27","A:S","Explicit budget impacts for every entity/function/category","Synthetic"],["Monthly_Data","A:N","Reconciled monthly baseline facts","Synthetic"],["KPI_Catalog","A:K","KPI definitions, current, target and global benchmark","Synthetic except illustrative benchmarks"],["KPI_History","A:H","Monthly KPI observations by geography","Synthetic"],["OD_Movements","A:W","Hire, Natural Attrition, Forced Exit, Transfer In and Transfer Out events; exit subtype, signed FTE, recurring cost impact and one-off ENR impact","Synthetic"],["OD_Movements","S:S","Transformation Social Cost (ENR): one-off cash cost only for Forced Exit, equal to nine months of employer cost with deterministic country variation","Synthetic"],["OD_Monthly","A:AD","Monthly OD ledger from frozen June 2026 baseline, Plan/Budget from July 2026, Actual July-August 2026 and Forecast September 2026-June 2029","Synthetic"],["OD_Monthly","S:W","Recurring Staff Cost, Recurring Employer Social Charges, Transformation Social Cost (ENR), Recurring Total People Cost and Total Cash Cost Including ENR","Synthetic"],["OD_Monthly","X:AB","Baseline Recurring Total People Cost, Recurring Savings vs Baseline, Net Savings After ENR, Cumulative Recurring Savings and Cumulative Net Savings","Synthetic"],["Generation Log","A:I","Traceability metadata plus explicit OD target, ENR and D&T economics assumptions","Synthetic"]]);
+trace.push([traceId("ODA","DT"),"OD_Assumptions","","","D&T","Nearshoring/internalization economics","FY26/27-FY28/29","D&T +2% final FTE and -10% final recurring staff cost per FTE (approx -8.2% total staff cost); paired transfers remain group neutral",SEED]);
+trace.push([traceId("ODA","FORCED"),"OD_Assumptions","","","ALL","Forced exit share of total exits","FY26/27-FY28/29","Finance ~95%; Sales, Supply, HR, D&T, Marketing ~30%",SEED]);
+appendBook(workbook,"Data Dictionary",[["Sheet","Field / Range","Definition","Status"],["Mapping","A:F","Synthetic legal entity geography reference","Synthetic"],["Cost Baseline","A:P","FY25/26 annual recurring cost baseline for the 6 in-scope support functions","Synthetic"],["Lever BCase - Updated","A:AV","Annual synthetic transformation initiatives","Synthetic"],["Budget FY26-27","A:S","Explicit budget impacts for every entity/function/category","Synthetic"],["Monthly_Data","A:N","Reconciled monthly baseline facts","Synthetic"],["KPI_Catalog","A:K","KPI definitions, current, target and global benchmark","Synthetic except illustrative benchmarks"],["KPI_History","A:H","Monthly KPI observations by geography","Synthetic"],["OD_Movements","A:X","Hire, Natural Attrition, Forced Exit, Transfer In and Transfer Out events; exit subtype, signed FTE, Program Scope, recurring cost impact and one-off ENR impact","Synthetic"],["OD_Movements","N:N","Program Scope flag - In-scope (6 support functions) or Out-of-scope (Operations)","Synthetic"],["OD_Movements","T:T","Transformation Social Cost (ENR): one-off cash cost only for Forced Exit, equal to nine months of employer cost with deterministic country variation","Synthetic"],["OD_Monthly","A:AE","Monthly OD ledger from frozen June 2026 baseline, Plan/Budget from July 2026, Actual July-August 2026 and Forecast September 2026-June 2029; includes out-of-scope Operations ledger frozen at 8450 FTE","Synthetic"],["OD_Monthly","J:J","Program Scope flag - In-scope (6 support functions covering 1550 FTE) or Out-of-scope (Operations, 8450 FTE frozen across scenarios)","Synthetic"],["OD_Monthly","T:X","Recurring Staff Cost, Recurring Employer Social Charges, Transformation Social Cost (ENR), Recurring Total People Cost and Total Cash Cost Including ENR","Synthetic"],["OD_Monthly","Y:AC","Baseline Recurring Total People Cost, Recurring Savings vs Baseline, Net Savings After ENR, Cumulative Recurring Savings and Cumulative Net Savings","Synthetic"],["OD_Assumptions","Program scope","In-scope program covers 1550 FTE across 6 support functions; virtual Operations function carries 8450 FTE out of scope for a group total of 10000 FTE","Synthetic"],["OD_Assumptions","Staff cost milestones","Group in-scope staff cost declines -3% by end FY26/27, -7% by end FY27/28 and -10% by end FY28/29","Synthetic"],["Generation Log","A:I","Traceability metadata plus explicit OD target, ENR, D&T economics and program scope assumptions","Synthetic"]]);
 appendBook(workbook,"Generation Log",[["Trace ID","Dataset","Legal Entity","Country","Function","Category / KPI","Period","Generation Method","Seed"],...trace]);
 
 workbook.Props={Title:"Gooduelle Performance Demo - Traceable Synthetic Data",Subject:"Fully synthetic and traceable demonstration dataset",Author:"Gooduelle Demo Generator",Company:"Gooduelle",Comments:`Generated deterministically with seed ${SEED}. No operational source data used.`};
